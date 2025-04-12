@@ -1,0 +1,164 @@
+# https://cloud.google.com/bigtable/docs/writing-data
+
+from google.cloud import bigtable
+import csv
+
+project_id = "cs-415-450800"
+instance_id = "ev-bigtable"
+table_id = "ev-population"
+
+client = bigtable.Client(project=project_id, admin=True)
+instance = client.instance(instance_id)
+table = instance.table(table_id)
+
+# Column Family: ev_info
+# Row Key: DOL Vehicle ID
+# Columns: make , model , model year, electric range, city, county
+
+def write_data(row_data):
+    column_family_id = "ev_info"
+
+    row_key = row_data["DOL Vehicle ID"].encode('utf-8')
+
+    row = table.direct_row(row_key)
+    row.set_cell(column_family_id, "make", row_data["Make"].encode('utf-8'))
+    row.set_cell(column_family_id, "model", row_data["Model"].encode('utf-8'))
+    row.set_cell(column_family_id, "model year", row_data["Model Year"].encode('utf-8'))
+    row.set_cell(column_family_id, "electric range", row_data["Electric Range"].encode('utf-8'))
+    row.set_cell(column_family_id, "city", row_data["City"].encode('utf-8'))
+    row.set_cell(column_family_id, "county", row_data["County"].encode('utf-8'))
+
+    row.commit()
+
+    print("Successfully wrote a row")
+
+
+csv_file = 'Electric_Vehicle_Population_Data.csv'  # Replace with your CSV path
+with open(csv_file, 'r') as f:
+    reader = csv.DictReader(f)
+    for i, row in enumerate(reader):
+        write_data(row)
+        if i % 100 == 0:
+            print(f"Processed {i} rows...")
+print("Data loading complete")
+
+
+
+
+from flask import Flask
+from google.cloud import bigtable
+from google.cloud.bigtable import row_filters
+import os
+
+app = Flask(__name__)
+@app.route('/', methods=['GET'])
+def hello_cloud():
+  return 'hello'
+
+project_id = "cs-415-450800"
+instance_id = "ev-bigtable"
+table_id = "ev-population"
+
+client = bigtable.Client(project=project_id, admin=True)
+instance = client.instance(instance_id)
+table = instance.table(table_id)
+
+
+
+@app.route('/rows', methods=['GET'])
+def get_total_rows():
+    # returns the total number of entries in Bigtable
+    try:
+        rows = table.read_rows()
+        count = sum(1 for _ in rows)
+        return str(count)
+    except Exception as e:
+        return "/rows failed with error: " + str(e)
+    
+
+
+@app.route('/Best-BMW', methods=['GET'])
+def get_best_bmw():
+    # Find the count of BMW EVs with an electric range > 100 miles
+    try:
+        # Filter for rows where 'make' is 'BMW'
+        bmw_filter = row_filters.ColumnQualifierRegexFilter("make")
+        bmw_value_filter = row_filters.ValueRegexFilter("BMW")
+        
+        # Filter for rows where 'electric range' > 100
+        range_filter = row_filters.ColumnQualifierRegexFilter("electric range")
+        range_value_filter = row_filters.ValueRangeFilter(start_value="100")
+        
+        # Combine filters (BMW AND range > 100)
+        chain = row_filters.RowFilterChain(filters=[
+            row_filters.FamilyNameRegexFilter("ev_info"),  # Only check 'ev_info' family
+            bmw_filter,
+            bmw_value_filter,
+            range_filter,
+            range_value_filter
+        ])
+        
+        # Read matching rows and count them
+        rows = table.read_rows(filter_=chain)
+        count = sum(1 for _ in rows)
+        return str(count)
+        # bmw_filter = row_filters.RowFilter(family_name_regex='ev_info', column_qualifier_regex='make', value_regex='BMW')
+        # range_filter = row_filters.RowFilter(family_name_regex='ev_info', column_qualifier_regex='electric range',
+        #                        value_range=row_filters.ValueRangeFilter(start_value='100'))
+        
+        # rows = table.read_rows(filter_=row_filters.RowFilterChain([bmw_filter, range_filter]))
+        # count = sum(1 for _ in rows)
+        # return str(count)
+    except Exception as e:
+        return "/Best-BMW failed with error: " + str(e)
+
+@app.route('/tesla-owners', methods=['GET'])
+def get_tesla_seattle():
+    # Retrieve the count of all Tesla vehicles registered in Seattle
+    try:
+        tesla_filter = row_filters.RowFilter(family_name_regex='ev_info', column_qualifier_regex='make', value_regex='Tesla')
+        city_filter = row_filters.RowFilter(family_name_regex='ev_info', column_qualifier_regex='city', value_regex='Seattle')
+        
+        rows = table.read_rows(filter_=row_filters.RowFilterChain([tesla_filter, city_filter]))
+        count = sum(1 for _ in rows)
+        return str(count)
+    except Exception as e:
+        return "/tesla-owners failed with error: " + str(e)
+
+@app.route('/update', methods=['POST'])
+def update_range():
+    # Update the electric range of the vehicle with DOL Vehicle ID 257246118 to 200 miles. 
+    try:
+        row_key = '257246118'
+        row = table.row(row_key)
+        
+        if not row.exists():
+            return "row not found"
+        
+        row.set_cell('ev_info', 'electric range', '200')
+        row.commit()
+        
+        return "Success"
+    except Exception as e:
+        return "/update failed with error: " + str(e)
+
+@app.route('/delete', methods=['DELETE'])
+def delete_old_records():
+    # Delete all records where the model year is less than 2014 and retrieve the count of remaining records
+    try:
+        year_filter = row_filters.RowFilter(family_name_regex='ev_info', column_qualifier_regex='model year',
+                              value_range=row_filters.ValueRangeFilter(end_value='2013', inclusive_end=True))
+        rows_to_delete = list(table.read_rows(filter_=year_filter))
+        
+        for row in rows_to_delete:
+            table.delete_row(row.row_key)
+        
+        remaining_rows = table.read_rows()
+        remaining_count = sum(1 for _ in remaining_rows)
+        
+        return str(remaining_count)
+    except Exception as e:
+        return "/delete failed with error: " + str(e)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080, debug=True)

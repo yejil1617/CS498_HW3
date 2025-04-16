@@ -1,3 +1,54 @@
+# data
+# https://cloud.google.com/bigtable/docs/writing-data
+
+from google.cloud import bigtable
+import csv
+
+project_id = "cs-415-450800"
+instance_id = "ev-bigtable"
+table_id = "ev-population"
+
+client = bigtable.Client(project=project_id, admin=True)
+instance = client.instance(instance_id)
+table = instance.table(table_id)
+
+# Column Family: ev_info
+# Row Key: DOL Vehicle ID
+# Columns: make , model , model year, electric range, city, county
+
+def write_data(row_data):
+    column_family_id = "ev_info"
+
+    row_key = row_data["DOL Vehicle ID"].encode('utf-8')
+
+    row = table.direct_row(row_key)
+    row.set_cell(column_family_id, "make", row_data["Make"].encode('utf-8'))
+    row.set_cell(column_family_id, "model", row_data["Model"].encode('utf-8'))
+    row.set_cell(column_family_id, "model year", row_data["Model Year"].encode('utf-8'))
+    row.set_cell(column_family_id, "electric range", int(row_data["Electric Range"]))
+    row.set_cell(column_family_id, "city", row_data["City"].encode('utf-8'))
+    row.set_cell(column_family_id, "county", row_data["County"].encode('utf-8'))
+
+    row.commit()
+
+    print("Successfully wrote a row")
+
+
+csv_file = 'Electric_Vehicle_Population_Data.csv'  # Replace with your CSV path
+with open(csv_file, 'r') as f:
+    reader = csv.DictReader(f)
+    for i, row in enumerate(reader):
+        write_data(row)
+        if i % 100 == 0:
+            print(f"Processed {i} rows...")
+print("Data loading complete")
+
+
+
+
+
+
+# api
 from flask import Flask
 from google.cloud import bigtable
 from google.cloud.bigtable import row_filters
